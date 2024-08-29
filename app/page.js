@@ -1,29 +1,29 @@
-'use client'
+'use client';
 
-import { useUser } from "@clerk/nextjs";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { writeBatch, doc, collection, getDoc } from "firebase/firestore";
-import { db } from "@/firebase";
-import { 
-  Container, 
-  Box, 
-  Typography, 
-  TextField, 
-  Button, 
-  Grid, 
-  Card, 
-  CardContent, 
-  CardActionArea, 
-  Dialog, 
-  DialogTitle, 
-  DialogContent, 
-  DialogContentText, 
-  DialogActions 
-} from "@mui/material";
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { writeBatch, doc, collection, getDoc } from 'firebase/firestore';
+import { db, auth } from '@/app/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import {
+    Container,
+    Box,
+    Typography,
+    TextField,
+    Button,
+    Grid,
+    Card,
+    CardContent,
+    CardActionArea,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    DialogActions
+} from '@mui/material';
 
-export default function Generate(){
-    const { isLoaded, isSignedIn, user } = useUser();
+export default function Generate() {
+    const [user, setUser] = useState(null);
     const [flashcards, setFlashcards] = useState([]);
     const [flipped, setFlipped] = useState({});
     const [text, setText] = useState('');
@@ -31,50 +31,58 @@ export default function Generate(){
     const [open, setOpen] = useState(false);
     const router = useRouter();
 
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+            setUser(user);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
     const handleSubmit = async () => {
         if (!text.trim()) {
-          alert('Please enter some text to generate flashcards.');
-          return;
+            alert('Please enter some text to generate flashcards.');
+            return;
         }
-      
+
         try {
-          const response = await fetch('/api/generate', {
-            method: 'POST',
-            body: text,
-          });
-      
-          if (!response.ok) {
-            throw new Error('Failed to generate flashcards');
-          }
-      
-          const data = await response.json();
-          setFlashcards(data);
-          // Initialize the flipped state for each flashcard
-          const initialFlippedState = data.reduce((acc, _, index) => {
-            acc[index] = false;
-            return acc;
-          }, {});
-          setFlipped(initialFlippedState);
+            const response = await fetch('/api/generate', {
+                method: 'POST',
+                body: text,
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to generate flashcards');
+            }
+
+            const data = await response.json();
+            setFlashcards(data);
+
+            const initialFlippedState = data.reduce((acc, _, index) => {
+                acc[index] = false;
+                return acc;
+            }, {});
+            setFlipped(initialFlippedState);
         } catch (error) {
-          console.error('Error generating flashcards:', error);
-          alert('An error occurred while generating flashcards. Please try again.');
+            console.error('Error generating flashcards:', error);
+            alert('An error occurred while generating flashcards. Please try again.');
         }
-    }
+    };
 
     const handleCardClick = (id) => {
         setFlipped((prev) => ({
             ...prev,
             [id]: !prev[id], // Toggle flip state
         }));
-    }
+    };
 
     const handleOpen = () => {
         setOpen(true);
-    }
+    };
 
     const handleClose = () => {
         setOpen(false);
-    }
+    };
 
     const saveFlashcards = async () => {
         if (!name) {
@@ -82,33 +90,42 @@ export default function Generate(){
             return;
         }
 
-        const batch = writeBatch(db);
-        const userDocRef = doc(collection(db, 'users')); // Ensure user.id is correct
-        const docSnap = await getDoc(userDocRef);
-
-        if (docSnap.exists()) {
-            const collections = docSnap.data().flashcards || [];
-            if (collections.find((f) => f.name === name)) {
-                alert('Flashcard collection with the same name already exists.');
-                return;
-            } else {
-                collections.push({ name });
-                batch.set(userDocRef, { flashcards: collections }, { merge: true });
-            }
-        } else {
-            batch.set(userDocRef, { flashcards: [{ name }] });
+        if (!user) {
+            alert('User is not signed in');
+            return;
         }
 
-        const colRef = collection(userDocRef, name);
-        flashcards.forEach((flashcard) => {
-            const cardDocRef = doc(colRef);
-            batch.set(cardDocRef, flashcard);
-        });
+        const batch = writeBatch(db);
+        const userDocRef = doc(db, 'users', user.uid); // Use user.uid to get the current user's document
 
-        await batch.commit();
-        handleClose();
-        router.push('/flashcards');
-    }
+        try {
+            const docSnap = await getDoc(userDocRef);
+
+            let collections = docSnap.exists() ? docSnap.data().flashcards || [] : [];
+
+            if (collections.some((f) => f.name === name)) {
+                alert('Flashcard collection with the same name already exists.');
+                return;
+            }
+
+            collections.push({ name });
+
+            batch.set(userDocRef, { flashcards: collections }, { merge: true });
+
+            const colRef = collection(userDocRef, name);
+            flashcards.forEach((flashcard) => {
+                const cardDocRef = doc(colRef);
+                batch.set(cardDocRef, flashcard);
+            });
+
+            await batch.commit();
+            handleClose();
+            router.push('/flashcards');
+        } catch (error) {
+            console.error('Error saving flashcards:', error);
+            alert('An error occurred while saving flashcards. Please try again.');
+        }
+    };
 
     return (
         <Container maxWidth="md">
